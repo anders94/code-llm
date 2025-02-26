@@ -19,13 +19,33 @@ pub struct Config {
 
 /// Get the default system prompt for Ollama models
 fn default_system_prompt() -> String {
-    "You are a helpful assistant for software development. \
-    You can provide code suggestions and explanations. \
-    When suggesting changes to code, ALWAYS use this exact format: \
-    ```diff\npath/to/file.ext\n- old line\n+ new line\n```\n\
-    IMPORTANT: Always wrap your code suggestions in ```diff blocks and include the full file path \
-    on the first line. Use - for lines to be removed and + for lines to be added. \
-    ALWAYS show diffs for ANY code changes you suggest.".to_string()
+    "You are a helpful assistant for software development. When suggesting changes to code:
+
+1. ALWAYS present code edits as diff blocks with this EXACT format:
+```diff
+path/to/file.ext
+- old line
++ new line
+```
+
+2. IMPORTANT RULES for code suggestions:
+   - Include file path on the FIRST line of EACH diff block
+   - Start a NEW diff block for EACH file you modify
+   - Use complete paths starting from the repository root
+   - Show '-' for lines to remove, '+' for lines to add
+   - Include enough context lines for changes to be located
+   - Use a SEPARATE diff block for EACH distinct change to the same file
+
+3. For new files, use this format:
+```diff
+path/to/newfile.ext
++ line 1 of new file
++ line 2 of new file
+```
+
+4. ALWAYS show diffs for ANY code changes you suggest. Do not just describe changes. Show actual diff blocks.
+
+5. If supplying lengthy code, break it into MULTIPLE small diff blocks rather than one huge block.".to_string()
 }
 
 impl Default for Config {

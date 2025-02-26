@@ -204,7 +204,14 @@ async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config:
             continue;
         }
 
-        println!("{}", format!("Found {} code suggestion(s):", diff_blocks.len()).green());
+        // Check if the code block was explicitly marked as a diff
+        let has_explicit_diff = response.contains("```diff");
+        
+        if has_explicit_diff {
+            println!("{}", format!("Found {} explicit diff suggestion(s):", diff_blocks.len()).green());
+        } else {
+            println!("{}", format!("Found {} code suggestion(s) that look like diffs:", diff_blocks.len()).green());
+        }
 
         // Parse diffs from the extracted blocks
         let diffs = diff_generator.extract_diffs(&response);
