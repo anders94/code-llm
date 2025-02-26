@@ -1,5 +1,6 @@
 mod api;
 mod cli;
+mod config;
 mod context;
 mod diff;
 mod utils;

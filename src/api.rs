@@ -3,11 +3,14 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::config::Config;
+
 #[derive(Debug, Clone)]
 pub struct OllamaClient {
     api_url: String,
     model: String,
     client: Client,
+    config: Config,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,11 +28,12 @@ struct OllamaResponse {
 }
 
 impl OllamaClient {
-    pub fn new(api_url: &str, model: &str) -> Self {
+    pub fn new(api_url: &str, model: &str, config: Config) -> Self {
         Self {
             api_url: api_url.to_string(),
             model: model.to_string(),
             client: Client::new(),
+            config,
         }
     }
     
@@ -45,15 +49,8 @@ impl OllamaClient {
     ) -> Result<String> {
         let history = conversation_history.join("\n");
         
-        let system_prompt = format!(
-            "You are a helpful assistant for software development. \
-            You can provide code suggestions and explanations. \
-            When suggesting changes to code, ALWAYS use this exact format: \
-            ```diff\npath/to/file.ext\n- old line\n+ new line\n```\n\
-            IMPORTANT: Always wrap your code suggestions in ```diff blocks and include the full file path \
-            on the first line. Use - for lines to be removed and + for lines to be added. \
-            ALWAYS show diffs for ANY code changes you suggest."
-        );
+        // Get the configured system prompt for this model
+        let system_prompt = self.config.get_system_prompt(&self.model);
         
         let full_prompt = format!(
             "{}\n\nContext of the current directory:\n{}\n\nUser request: {}",

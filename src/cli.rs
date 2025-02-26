@@ -2,13 +2,13 @@ use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Select};
-use dirs::home_dir;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::fs;
 use std::path::PathBuf;
 
 use crate::api::OllamaClient;
+use crate::config::{load_config, get_config_dir, get_config_path};
 use crate::context::ContextManager;
 use crate::diff::{DiffGenerator, DiffAction};
 
@@ -31,12 +31,26 @@ pub struct Cli {
 enum Commands {
     /// Initialize a new context
     Init,
+    
+    /// Edit the configuration
+    Config {
+        /// Show the path to the configuration file
+        #[clap(short, long)]
+        path: bool,
+        
+        /// Open the configuration file in the default editor
+        #[clap(short, long)]
+        edit: bool,
+    },
 }
 
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     let model = cli.model;
     let api_url = cli.api_url;
+    
+    // Load configuration
+    let config = load_config()?;
 
     match &cli.command {
         Some(Commands::Init) => {
@@ -44,17 +58,58 @@ pub async fn run_cli() -> Result<()> {
             // Initialize code context logic would go here
             return Ok(());
         }
+        Some(Commands::Config { path, edit }) => {
+            let config_path = get_config_path()?;
+            
+            if *path {
+                // Just show the path to the config file
+                println!("{}", config_path.to_string_lossy());
+                return Ok(());
+            }
+            
+            if *edit {
+                // Try to open the default editor
+                #[cfg(target_os = "windows")]
+                {
+                    std::process::Command::new("notepad")
+                        .arg(&config_path)
+                        .spawn()?;
+                }
+                
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // Try to get the default editor from environment variables
+                    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                    std::process::Command::new(editor)
+                        .arg(&config_path)
+                        .spawn()?
+                        .wait()?;
+                }
+                
+                println!("{}", format!("Edited configuration at {}", config_path.display()).green());
+                return Ok(());
+            }
+            
+            // Default behavior: print the config file contents
+            if config_path.exists() {
+                let config_content = fs::read_to_string(&config_path)?;
+                println!("{}", config_content);
+            } else {
+                println!("{}", "Configuration file does not exist yet. It will be created when you first run the tool.".yellow());
+            }
+            return Ok(());
+        }
         None => {
             // Interactive mode
-            run_interactive_mode(&model, &api_url).await?;
+            run_interactive_mode(&model, &api_url, config).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
-    let client = OllamaClient::new(api_url, model);
+async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config::Config) -> Result<()> {
+    let client = OllamaClient::new(api_url, model, config);
     let context_manager = ContextManager::new(".")?;
     let diff_generator = DiffGenerator::new();
     
@@ -195,15 +250,9 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Get the path to the history file in the user's home directory
+/// Get the path to the history file in the config directory
 fn get_history_file_path() -> Result<PathBuf> {
-    let mut path = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
-    path.push(".code-llm");
-    
-    // Create the .code-llm directory if it doesn't exist
-    if !path.exists() {
-        fs::create_dir_all(&path)?;
-    }
+    let mut path = get_config_dir()?;
     
     // Add the history file name
     path.push("history");
