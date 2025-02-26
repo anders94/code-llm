@@ -133,15 +133,23 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
         // Check if response contains code suggestions
         println!("{}", "Analyzing response for code suggestions...".yellow());
 
-        // Extract and print diff blocks (before parsing)
-        let diff_blocks = diff_generator.extract_raw_diff_blocks(&response);
-        if !diff_blocks.is_empty() {
-            println!("{}", format!("Found {} code suggestion(s):", diff_blocks.len()).green());
-        } else {
-            println!("{}", "No code suggestions found in response. The model might not be using the diff format.".yellow());
-            println!("{}: {}", "Assistant".bright_blue(), response);
+        // Always display the response first so the user sees what the AI said
+        println!("{}: {}", "Assistant".bright_blue(), response);
+        
+        // Then check for diffs separately
+        if !response.contains("```") {
+            // No code blocks found at all
             continue;
         }
+        
+        // Extract and print diff blocks (before parsing)
+        let diff_blocks = diff_generator.extract_raw_diff_blocks(&response);
+        if diff_blocks.is_empty() {
+            // No diff suggestions found, just continue
+            continue;
+        }
+
+        println!("{}", format!("Found {} code suggestion(s):", diff_blocks.len()).green());
 
         // Parse diffs from the extracted blocks
         let diffs = diff_generator.extract_diffs(&response);
@@ -177,7 +185,8 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
             // Update context after changes
             current_context = context_manager.get_context()?;
         } else {
-            // Just display the response if no code suggestions
+            // No valid diffs could be parsed
+            println!("{}", "Found code block(s) but couldn't parse valid diff(s).".yellow());
             println!("{}: {}", "Assistant".bright_blue(), response);
         }
     }
@@ -189,14 +198,15 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
 /// Get the path to the history file in the user's home directory
 fn get_history_file_path() -> Result<PathBuf> {
     let mut path = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
-    path.push(".code-llm_history");
+    path.push(".code-llm");
     
-    // Make sure the parent directory exists
-    if let Some(parent) = path.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent)?;
-        }
+    // Create the .code-llm directory if it doesn't exist
+    if !path.exists() {
+        fs::create_dir_all(&path)?;
     }
+    
+    // Add the history file name
+    path.push("history");
     
     Ok(path)
 }

@@ -125,13 +125,64 @@ impl DiffGenerator {
         let diff_regex = Regex::new(r"```(?:diff)?\s*\n((?:.|\n)*?)```").unwrap();
         Self { diff_regex }
     }
+    
+    // Helper method to check if a block is likely a diff
+    fn is_diff_block(&self, block: &str) -> bool {
+        // Check for common diff markers
+        let lines: Vec<&str> = block.lines().collect();
+        if lines.is_empty() {
+            return false;
+        }
+        
+        // First check if it's explicitly marked as a diff
+        let first_line = lines[0].trim().to_lowercase();
+        let explicitly_marked = first_line.contains("diff") || 
+                                first_line.contains("patch") ||
+                                first_line.contains("index.js") ||
+                                first_line.contains(".js") || 
+                                first_line.contains(".ts") ||
+                                first_line.contains(".py") ||
+                                first_line.contains(".rs") ||
+                                first_line.contains(".java") ||
+                                first_line.contains(".c") ||
+                                first_line.contains(".cpp") ||
+                                first_line.contains(".h") ||
+                                first_line.contains(".go") ||
+                                first_line.contains(".rb") ||
+                                first_line.contains(".php") ||
+                                first_line.contains(".html") ||
+                                first_line.contains(".css") ||
+                                first_line.contains(".json") ||
+                                first_line.contains(".md") ||
+                                first_line.contains(".yml") ||
+                                first_line.contains(".yaml") ||
+                                first_line.contains(".xml") ||
+                                first_line.contains(".txt");
+        
+        if explicitly_marked {
+            // Additional validation: check if at least one line starts with + or -
+            // This helps filter out regular code blocks that might just have a filename in the first line
+            return lines.iter().skip(1).any(|line| line.starts_with('+') || line.starts_with('-'));
+        }
+        
+        // Not marked explicitly, so be more demanding about + and - presence
+        let plus_count = lines.iter().filter(|line| line.starts_with('+')).count();
+        let minus_count = lines.iter().filter(|line| line.starts_with('-')).count();
+        
+        // Only consider it a diff if there's at least one + and one -, or several of either
+        plus_count >= 2 || minus_count >= 2 || (plus_count >= 1 && minus_count >= 1)
+    }
 
     pub fn extract_raw_diff_blocks(&self, text: &str) -> Vec<String> {
         let mut blocks = Vec::new();
 
         for captures in self.diff_regex.captures_iter(text) {
             if let Some(diff_text) = captures.get(1) {
-                blocks.push(diff_text.as_str().to_string());
+                let block = diff_text.as_str().to_string();
+                // Only include blocks that look like diffs (contain + or - lines)
+                if self.is_diff_block(&block) {
+                    blocks.push(block);
+                }
             }
         }
 
@@ -143,8 +194,12 @@ impl DiffGenerator {
 
         for captures in self.diff_regex.captures_iter(text) {
             if let Some(diff_text) = captures.get(1) {
-                if let Ok(diff) = self.parse_diff(diff_text.as_str()) {
-                    diffs.push(diff);
+                let block = diff_text.as_str();
+                // Only try to parse blocks that look like diffs
+                if self.is_diff_block(block) {
+                    if let Ok(diff) = self.parse_diff(block) {
+                        diffs.push(diff);
+                    }
                 }
             }
         }
@@ -188,7 +243,10 @@ impl DiffGenerator {
             // For new files, we'll just collect all the added lines
             for line in lines.iter().skip(1) {
                 if line.starts_with('+') {
-                    new_content.push_str(&line[1..]);
+                    // Trim leading space after the '+' to handle "+ code" formatting
+                    let content = &line[1..];
+                    let trimmed = if content.starts_with(' ') { &content[1..] } else { content };
+                    new_content.push_str(trimmed);
                     new_content.push('\n');
                 }
             }
@@ -207,9 +265,13 @@ impl DiffGenerator {
             // First, collect all removed and added lines
             for line in lines.iter().skip(1) {
                 if line.starts_with('-') {
+                    // For removed lines, we need to keep the exact formatting
                     removed_lines.push(&line[1..]);
                 } else if line.starts_with('+') {
-                    added_lines.push(&line[1..]);
+                    // For added lines, handle the "+ code" formatting by removing extra leading space
+                    let content = &line[1..];
+                    let trimmed = if content.starts_with(' ') { &content[1..] } else { content };
+                    added_lines.push(trimmed);
                 }
             }
 
