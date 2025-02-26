@@ -37,33 +37,58 @@ impl FileDiff {
 
 impl DiffAction for FileDiff {
     fn apply(&self) -> Result<()> {
+        // Get current directory
+        let current_dir = std::env::current_dir()
+            .map_err(|_| anyhow!("Failed to get current directory"))?;
+            
+        // Extract the filename from the file_path, ensuring it's relative to current directory
+        let file_name = if let Some(name) = self.file_path.file_name() {
+            PathBuf::from(name)
+        } else {
+            return Err(anyhow!("Invalid file path"));
+        };
+        
+        let target_path = current_dir.join(&file_name);
+        
         if self.is_new_file {
-            // Create directories if they don't exist
-            if let Some(parent) = self.file_path.parent() {
+            // For new files, create directories if needed and write the content
+            if let Some(parent) = target_path.parent() {
                 ensure_directory_exists(parent)?;
             }
-        } else if !self.file_path.exists() {
-            return Err(anyhow!(DiffError::FileNotFound(
-                self.file_path.to_string_lossy().to_string()
-            )));
+            
+            fs::write(&target_path, &self.new_content)
+                .with_context(|| format!("Failed to write to new file: {:?}", target_path))?;
+        } else {
+            // For existing files, verify they exist
+            if !target_path.exists() {
+                return Err(anyhow!(DiffError::FileNotFound(
+                    target_path.to_string_lossy().to_string()
+                )));
+            }
+            
+            // Write the new content to the file
+            fs::write(&target_path, &self.new_content)
+                .with_context(|| format!("Failed to write to file: {:?}", target_path))?;
         }
-
-        fs::write(&self.file_path, &self.new_content)
-            .with_context(|| format!("Failed to write to file: {:?}", self.file_path))?;
 
         Ok(())
     }
 
     fn display_diff(&self) -> String {
         use colored::*;
-        let path_str = self.file_path.to_string_lossy();
+        
+        // Get just the filename part for display
+        let file_name = self.file_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown file".to_string());
 
         if self.is_new_file {
-            format!("New file: {}\n{}", path_str, self.new_content.green())
+            format!("New file: {}\n{}", file_name, self.new_content.green())
         } else {
             let diff = TextDiff::from_lines(&self.old_content, &self.new_content);
 
-            let mut diff_output = format!("File: {}\n", path_str);
+            let mut diff_output = format!("File: {}\n", file_name);
 
             for op in diff.ops() {
                 for change in diff.iter_changes(op) {
@@ -136,41 +161,25 @@ impl DiffGenerator {
                 "Diff is empty".to_string()
             )));
         }
-
-        // Sanitize the file path to ensure it's relative to the current directory
-        let mut file_path = PathBuf::from(lines[0].trim());
         
-        // Remove any leading slashes or path traversal attempts
-        if file_path.is_absolute() || lines[0].trim().starts_with("/") || 
-           lines[0].trim().starts_with("\\") || lines[0].trim().starts_with("..") {
-            // Convert to a relative path by taking just the file name
-            if let Some(file_name) = file_path.file_name() {
-                file_path = PathBuf::from(file_name);
-            } else {
-                return Err(anyhow!(DiffError::InvalidFormat(
-                    format!("Invalid file path: {}", lines[0].trim())
-                )));
-            }
-        }
+        // Extract a clean filename from the first line, ignoring diff markers
+        let first_line = lines[0].trim();
+        let file_path_str = first_line
+            .trim_start_matches('+')
+            .trim_start_matches('-')
+            .trim_start_matches("// ")
+            .trim_start_matches("/* ")
+            .trim_start_matches("* ")
+            .trim_start_matches("/*")
+            .trim_start_matches('/')
+            .trim_start_matches('\\')
+            .trim();
+            
+        // Build a simple path, we'll sanitize it when applying
+        let file_path = PathBuf::from(file_path_str);
         
-        // Ensure the path doesn't try to navigate outside the current directory
-        for component in file_path.components() {
-            if let std::path::Component::ParentDir = component {
-                return Err(anyhow!(DiffError::InvalidFormat(
-                    format!("Path traversal attempt detected: {}", lines[0].trim())
-                )));
-            }
-        }
-        
-        // Get current directory to ensure all operations are relative
-        let current_dir = std::env::current_dir()
-            .map_err(|_| anyhow!("Failed to get current directory"))?;
-        
-        // Combine with current directory to get the full path
-        let full_path = current_dir.join(&file_path);
-        
-        // Use the sanitized path for all operations
-        let is_new_file = !full_path.exists();
+        // Check if the file exists in the current directory
+        let is_new_file = !std::path::Path::new(file_path.file_name().unwrap_or_default()).exists();
 
         let mut old_content = String::new();
         let mut new_content = String::new();
@@ -184,9 +193,12 @@ impl DiffGenerator {
                 }
             }
         } else {
+            // Get the path to the current file in the working directory
+            let actual_path = std::path::Path::new(file_path.file_name().unwrap_or_default());
+            
             // For existing files, read the current content
-            old_content = fs::read_to_string(&full_path)
-                .map_err(|_| anyhow!(DiffError::FileNotFound(full_path.to_string_lossy().to_string())))?;
+            old_content = fs::read_to_string(actual_path)
+                .map_err(|_| anyhow!(DiffError::FileNotFound(actual_path.to_string_lossy().to_string())))?;
 
             // Track our position in the document as we process diff lines
             let mut removed_lines = Vec::new();
@@ -239,7 +251,7 @@ impl DiffGenerator {
         }
 
         Ok(FileDiff {
-            file_path: full_path,
+            file_path,
             old_content,
             new_content,
             is_new_file,
