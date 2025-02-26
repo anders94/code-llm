@@ -137,8 +137,40 @@ impl DiffGenerator {
             )));
         }
 
-        let file_path = PathBuf::from(lines[0].trim());
-        let is_new_file = !file_path.exists();
+        // Sanitize the file path to ensure it's relative to the current directory
+        let mut file_path = PathBuf::from(lines[0].trim());
+        
+        // Remove any leading slashes or path traversal attempts
+        if file_path.is_absolute() || lines[0].trim().starts_with("/") || 
+           lines[0].trim().starts_with("\\") || lines[0].trim().starts_with("..") {
+            // Convert to a relative path by taking just the file name
+            if let Some(file_name) = file_path.file_name() {
+                file_path = PathBuf::from(file_name);
+            } else {
+                return Err(anyhow!(DiffError::InvalidFormat(
+                    format!("Invalid file path: {}", lines[0].trim())
+                )));
+            }
+        }
+        
+        // Ensure the path doesn't try to navigate outside the current directory
+        for component in file_path.components() {
+            if let std::path::Component::ParentDir = component {
+                return Err(anyhow!(DiffError::InvalidFormat(
+                    format!("Path traversal attempt detected: {}", lines[0].trim())
+                )));
+            }
+        }
+        
+        // Get current directory to ensure all operations are relative
+        let current_dir = std::env::current_dir()
+            .map_err(|_| anyhow!("Failed to get current directory"))?;
+        
+        // Combine with current directory to get the full path
+        let full_path = current_dir.join(&file_path);
+        
+        // Use the sanitized path for all operations
+        let is_new_file = !full_path.exists();
 
         let mut old_content = String::new();
         let mut new_content = String::new();
@@ -153,34 +185,61 @@ impl DiffGenerator {
             }
         } else {
             // For existing files, read the current content
-            old_content = fs::read_to_string(&file_path)
-                .map_err(|_| anyhow!(DiffError::FileNotFound(file_path.to_string_lossy().to_string())))?;
+            old_content = fs::read_to_string(&full_path)
+                .map_err(|_| anyhow!(DiffError::FileNotFound(full_path.to_string_lossy().to_string())))?;
 
-            // Apply the diff to get the new content
-            new_content = old_content.clone();
+            // Track our position in the document as we process diff lines
+            let mut removed_lines = Vec::new();
+            let mut added_lines = Vec::new();
 
-            // Process diff lines
+            // First, collect all removed and added lines
             for line in lines.iter().skip(1) {
                 if line.starts_with('-') {
-                    // Line to remove
-                    let line_content = &line[1..];
-                    if let Some(pos) = new_content.find(line_content) {
-                        let start = new_content[..pos].rfind('\n').map_or(0, |p| p + 1);
-                        let end = pos + line_content.len();
-                        new_content.replace_range(start..end, "");
-                    }
+                    removed_lines.push(&line[1..]);
                 } else if line.starts_with('+') {
-                    // Line to add
-                    let line_content = &line[1..];
-                    new_content.push_str(line_content);
-                    new_content.push('\n');
+                    added_lines.push(&line[1..]);
                 }
-                // Skip context lines
+            }
+
+            // Simple approach: replace the old content with the new content
+            // by finding the removed lines and replacing them with added lines
+            let old_lines: Vec<&str> = old_content.lines().collect();
+            let mut new_lines = Vec::new();
+            
+            let mut i = 0;
+            while i < old_lines.len() {
+                // Try to find a sequence of removed lines starting at this position
+                let mut match_length = 0;
+                for (j, &removed) in removed_lines.iter().enumerate() {
+                    if i + j < old_lines.len() && old_lines[i + j] == removed {
+                        match_length += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                if match_length > 0 && match_length == removed_lines.len() {
+                    // Found all removed lines in sequence, replace with added lines
+                    for &added in &added_lines {
+                        new_lines.push(added.to_string());
+                    }
+                    i += match_length;
+                } else {
+                    // No match, keep the original line
+                    new_lines.push(old_lines[i].to_string());
+                    i += 1;
+                }
+            }
+
+            new_content = new_lines.join("\n");
+            // Add trailing newline if original had one
+            if old_content.ends_with('\n') {
+                new_content.push('\n');
             }
         }
 
         Ok(FileDiff {
-            file_path,
+            file_path: full_path,
             old_content,
             new_content,
             is_new_file,

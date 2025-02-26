@@ -1,7 +1,12 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Input, Select};
+use dialoguer::{theme::ColorfulTheme, Select};
+use dirs::home_dir;
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
+use std::fs;
+use std::path::PathBuf;
 
 use crate::api::OllamaClient;
 use crate::context::ContextManager;
@@ -59,29 +64,50 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
     let mut conversation_history = Vec::new();
     let mut current_context = context_manager.get_context()?;
     
+    // Set up rustyline for history
+    let history_path = get_history_file_path()?;
+    let mut rl = DefaultEditor::new()?;
+    
+    // Load history if the file exists
+    if history_path.exists() {
+        if let Err(err) = rl.load_history(&history_path) {
+            println!("{}", format!("Warning: Failed to load history: {}", err).yellow());
+        }
+    }
+    
     loop {
-        // Get user input, handling Ctrl+D as an exit signal
-        let user_input: String = match Input::with_theme(&ColorfulTheme::default())
-            .with_prompt("You")
-            .allow_empty(true)
-            .interact_text() {
-                Ok(input) => input,
-                Err(e) => {
-                    // Check if this is EOF (Ctrl+D)
-                    if e.to_string().contains("EOF") || e.to_string().contains("end of file") {
-                        println!("\n{}", "Exiting due to Ctrl+D".blue());
-                        break;
+        // Get user input with history support
+        let user_input = match rl.readline("You> ") {
+            Ok(line) => {
+                // Add valid input to history
+                if !line.trim().is_empty() {
+                    rl.add_history_entry(&line)?;
+                    
+                    // Save history after each command
+                    if let Err(err) = rl.save_history(&history_path) {
+                        println!("{}", format!("Warning: Failed to save history: {}", err).yellow());
                     }
-                    // For other errors, re-raise them
-                    return Err(e.into());
                 }
-            };
-            
+                line
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("{}", "Interrupted (Ctrl+C)".blue());
+                continue;
+            },
+            Err(ReadlineError::Eof) => {
+                println!("{}", "Exiting due to Ctrl+D".blue());
+                return Ok(());
+            },
+            Err(err) => {
+                return Err(anyhow!("Error reading input: {}", err));
+            }
+        };
+        
         if user_input.trim().is_empty() {
             // Skip empty inputs
             continue;
         }
-            
+        
         if user_input.trim().to_lowercase() == "exit" {
             break;
         }
@@ -158,4 +184,19 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
     
     println!("{}", "Thank you for using code-llm!".green());
     Ok(())
+}
+
+/// Get the path to the history file in the user's home directory
+fn get_history_file_path() -> Result<PathBuf> {
+    let mut path = home_dir().ok_or_else(|| anyhow!("Could not find home directory"))?;
+    path.push(".code-llm_history");
+    
+    // Make sure the parent directory exists
+    if let Some(parent) = path.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    
+    Ok(path)
 }
