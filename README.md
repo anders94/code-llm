@@ -1,4 +1,4 @@
-# Code CLI
+# Code LLM
 
 A CLI tool that works in an iterative chat-like style similar to "Claude Code", providing code suggestions based on your local directory context using Ollama models.
 
@@ -21,12 +21,12 @@ A CLI tool that works in an iterative chat-like style similar to "Claude Code", 
 Clone and build the project:
 
 ```bash
-git clone https://github.com/yourusername/code-cli.git
-cd code-cli
+git clone https://github.com/anders94/code-llm.git
+cd code-llm
 cargo build --release
 ```
 
-The binary will be available at `target/release/code-cli`.
+The binary will be available at `target/release/code-llm`.
 
 ## Usage
 
@@ -34,20 +34,20 @@ Basic usage:
 
 ```bash
 # Start interactive mode with default settings
-code-cli
+code-llm
 
 # Specify a different model
-code-cli --model codellama
+code-llm --model codellama
 
 # Change the Ollama API endpoint
-code-cli --api-url http://custom-ollama-host:11434
+code-llm --api-url http://custom-ollama-host:11434
 ```
 
 Commands:
 
 ```bash
 # Initialize context (builds initial context for the current directory)
-code-cli init
+code-llm init
 ```
 
 ## How it Works

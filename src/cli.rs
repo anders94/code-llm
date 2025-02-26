@@ -53,7 +53,7 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
     let context_manager = ContextManager::new(".")?;
     let diff_generator = DiffGenerator::new();
     
-    println!("{}", format!("Welcome to code-cli! Using model: {}", model).green());
+    println!("{}", format!("Welcome to code-llm! Using model: {}", model).green());
     println!("{}", "Type your questions/requests or 'exit' to quit.".blue());
     
     let mut conversation_history = Vec::new();
@@ -156,6 +156,6 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
         }
     }
     
-    println!("{}", "Thank you for using code-cli!".green());
+    println!("{}", "Thank you for using code-llm!".green());
     Ok(())
 }
