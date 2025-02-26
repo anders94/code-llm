@@ -32,6 +32,10 @@ impl OllamaClient {
             client: Client::new(),
         }
     }
+    
+    pub fn get_api_url(&self) -> &str {
+        &self.api_url
+    }
 
     pub async fn generate_response(
         &self,
@@ -63,14 +67,27 @@ impl OllamaClient {
             "stream": false
         });
 
-        let response = self.client
+        let raw_response = self.client
             .post(&request_url)
             .json(&request_body)
             .send()
-            .await?
-            .json::<OllamaResponse>()
             .await?;
-
-        Ok(response.response)
+            
+        // Store status and raw text for debugging purposes
+        let status = raw_response.status();
+        let body = raw_response.text().await?;
+        
+        // Try to deserialize
+        match serde_json::from_str::<OllamaResponse>(&body) {
+            Ok(parsed) => Ok(parsed.response),
+            Err(e) => {
+                // Include meaningful error that shows what's happening
+                let err_msg = format!(
+                    "Failed to parse response (Status: {}): {} \nRequest URL: {}\nRaw response: {}", 
+                    status, e, request_url, body
+                );
+                Err(anyhow::anyhow!(err_msg))
+            }
+        }
     }
 }

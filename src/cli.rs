@@ -60,9 +60,27 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
     let mut current_context = context_manager.get_context()?;
     
     loop {
-        let user_input: String = Input::with_theme(&ColorfulTheme::default())
+        // Get user input, handling Ctrl+D as an exit signal
+        let user_input: String = match Input::with_theme(&ColorfulTheme::default())
             .with_prompt("You")
-            .interact_text()?;
+            .allow_empty(true)
+            .interact_text() {
+                Ok(input) => input,
+                Err(e) => {
+                    // Check if this is EOF (Ctrl+D)
+                    if e.to_string().contains("EOF") || e.to_string().contains("end of file") {
+                        println!("\n{}", "Exiting due to Ctrl+D".blue());
+                        break;
+                    }
+                    // For other errors, re-raise them
+                    return Err(e.into());
+                }
+            };
+            
+        if user_input.trim().is_empty() {
+            // Skip empty inputs
+            continue;
+        }
             
         if user_input.trim().to_lowercase() == "exit" {
             break;
@@ -73,8 +91,18 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
         println!("{}", "Thinking...".yellow());
         
         // Get response from Ollama
-        let response = client.generate_response(&user_input, &current_context, &conversation_history).await?;
-        conversation_history.push(format!("Assistant: {}", response));
+        let response = match client.generate_response(&user_input, &current_context, &conversation_history).await {
+            Ok(response) => {
+                conversation_history.push(format!("Assistant: {}", response));
+                response
+            },
+            Err(e) => {
+                println!("{}", format!("Error: {}", e).red());
+                println!("{}", format!("API URL: {}/api/generate", client.get_api_url()).yellow());
+                println!("{}", "Couldn't process API response. The model may have returned an unexpected format.".yellow());
+                continue;
+            }
+        };
         
         // Check if response contains code suggestions
         let diffs = diff_generator.extract_diffs(&response);
