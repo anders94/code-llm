@@ -48,9 +48,11 @@ impl OllamaClient {
         let system_prompt = format!(
             "You are a helpful assistant for software development. \
             You can provide code suggestions and explanations. \
-            When suggesting changes to code, use markdown code blocks and \
-            show diffs in the format of: \
-            ```diff\npath/to/file.ext\n- old line\n+ new line\n```"
+            When suggesting changes to code, ALWAYS use this exact format: \
+            ```diff\npath/to/file.ext\n- old line\n+ new line\n```\n\
+            IMPORTANT: Always wrap your code suggestions in ```diff blocks and include the full file path \
+            on the first line. Use - for lines to be removed and + for lines to be added. \
+            ALWAYS show diffs for ANY code changes you suggest."
         );
         
         let full_prompt = format!(

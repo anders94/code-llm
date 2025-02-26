@@ -105,16 +105,30 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
         };
         
         // Check if response contains code suggestions
+        println!("{}", "Analyzing response for code suggestions...".yellow());
+
+        // Extract and print diff blocks (before parsing)
+        let diff_blocks = diff_generator.extract_raw_diff_blocks(&response);
+        if !diff_blocks.is_empty() {
+            println!("{}", format!("Found {} code suggestion(s):", diff_blocks.len()).green());
+        } else {
+            println!("{}", "No code suggestions found in response. The model might not be using the diff format.".yellow());
+            println!("{}: {}", "Assistant".bright_blue(), response);
+            continue;
+        }
+
+        // Parse diffs from the extracted blocks
         let diffs = diff_generator.extract_diffs(&response);
         
         if !diffs.is_empty() {
             for (i, diff) in diffs.iter().enumerate() {
                 println!("\n{} {}:", "Suggestion".bright_green(), i + 1);
+                // Print directly without further formatting to preserve ANSI colors
                 println!("{}", diff.display_diff());
                 
-                let options = vec!["Accept", "Reject", "Modify"];
+                let options = vec!["Accept", "Reject"];
                 let selection = Select::with_theme(&ColorfulTheme::default())
-                    .with_prompt("What would you like to do with this suggestion?")
+                    .with_prompt("Accept or reject this change?")
                     .default(0)
                     .items(&options)
                     .interact()?;
@@ -124,15 +138,11 @@ async fn run_interactive_mode(model: &str, api_url: &str) -> Result<()> {
                         // Accept the diff
                         println!("{}", "Applying changes...".green());
                         diff.apply()?;
+                        println!("{}", format!("✅ Changes successfully applied to {}", diff.get_file_path().display()).green());
                     },
                     1 => {
                         // Reject the diff
                         println!("{}", "Changes rejected.".yellow());
-                    },
-                    2 => {
-                        // Modify the diff
-                        println!("{}", "TODO: Implement modification of diffs".red());
-                        // This would involve opening the diff in an editor or providing a way to edit it
                     },
                     _ => unreachable!(),
                 }
