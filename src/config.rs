@@ -33,7 +33,8 @@ fn default_system_prompt() -> String {
 ```
 
 2. IMPORTANT RULES for code suggestions:
-   - Include file path in the header (--- and +++ lines) of EACH diff block
+   - Include COMPLETE file path in the header (--- and +++ lines) of EACH diff block
+   - The file path should be the FULL path relative to the project root (e.g., 'src/main.rs' NOT just 'main.rs')
    - Start a NEW diff block for EACH file you modify
    - Use complete paths starting from the repository root
    - Show '-' for lines to remove, '+' for lines to add
@@ -56,6 +57,8 @@ fn default_system_prompt() -> String {
 5. If supplying lengthy code, break it into MULTIPLE small diff blocks rather than one huge block.
 
 6. Make sure the line numbers in the @@ headers accurately reflect the line position in the file.
+
+7. CRITICAL: The path in the '+++ path/to/file.ext' line MUST be exact and complete. This is what will be used to locate the file.
 
 7. NEVER show more than one way to do something. Select the best option and only show that one.
 
