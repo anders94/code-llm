@@ -6,6 +6,11 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use std::io::{self, Write};
 
 use crate::api::OllamaClient;
 use crate::config::{load_config, get_config_dir, get_config_path};
@@ -108,6 +113,43 @@ pub async fn run_cli() -> Result<()> {
     Ok(())
 }
 
+/// Starts an animated "Thinking..." prompt with cycling dots in a separate thread.
+/// Returns a handle to the animation that can be used to stop it.
+fn start_thinking_animation() -> Arc<AtomicBool> {
+    let running = Arc::new(AtomicBool::new(true));
+    let running_clone = running.clone();
+    
+    thread::spawn(move || {
+        let mut state = 0;
+        let states = [".", "..", "...", "....", "....."];
+        
+        while running_clone.load(Ordering::SeqCst) {
+            // Clear the line and print the current state
+            print!("\r{}{:<5}", "Thinking".yellow(), states[state].yellow());
+            io::stdout().flush().unwrap();
+            
+            // Cycle through states
+            state = (state + 1) % states.len();
+            
+            // Wait a bit before updating
+            thread::sleep(Duration::from_millis(300));
+        }
+        
+        // Clear the line when done
+        print!("\r{:<15}\r", "");
+        io::stdout().flush().unwrap();
+    });
+    
+    running
+}
+
+/// Stops the thinking animation thread
+fn stop_thinking_animation(handle: Arc<AtomicBool>) {
+    handle.store(false, Ordering::SeqCst);
+    // Small delay to ensure the thread has time to clean up
+    thread::sleep(Duration::from_millis(50));
+}
+
 async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config::Config) -> Result<()> {
     let client = OllamaClient::new(api_url, model, config);
     let context_manager = ContextManager::new(".")?;
@@ -163,21 +205,28 @@ async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config:
             continue;
         }
         
-        if user_input.trim().to_lowercase() == "exit" {
+        if user_input.trim().to_lowercase() == "exit" || user_input.trim().to_lowercase() == "quit" {
             break;
         }
         
         conversation_history.push(format!("User: {}", user_input));
         
-        println!("{}", "Thinking...".yellow());
+        // Start the animated "Thinking..." prompt
+        let thinking_handle = start_thinking_animation();
         
         // Get response from Ollama
         let response = match client.generate_response(&user_input, &current_context, &conversation_history).await {
             Ok(response) => {
+                // Stop the thinking animation
+                stop_thinking_animation(thinking_handle);
+                
                 conversation_history.push(format!("Assistant: {}", response));
                 response
             },
             Err(e) => {
+                // Stop the thinking animation
+                stop_thinking_animation(thinking_handle);
+                
                 println!("{}", format!("Error: {}", e).red());
                 println!("{}", format!("API URL: {}/api/generate", client.get_api_url()).yellow());
                 println!("{}", "Couldn't process API response. The model may have returned an unexpected format.".yellow());

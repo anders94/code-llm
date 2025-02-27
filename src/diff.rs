@@ -77,64 +77,106 @@ impl DiffAction for FileDiff {
     fn display_diff(&self) -> String {
         use colored::*;
         
-        // Get just the filename part for display
-        let file_name = self.file_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown file".to_string());
+        // Get the full file path for display
+        let file_path_str = self.file_path
+            .to_string_lossy()
+            .to_string();
 
         if self.is_new_file {
-            // For new files, highlight the entire content with bright green background
-            let mut diff_output = format!("New file: {}\n", file_name);
+            // For new files, use standard unified diff format
+            let mut diff_output = format!("--- /dev/null\n+++ {}\n", file_path_str);
+            diff_output.push_str("@@ -0,0 +1,");
+            let new_lines_count = self.new_content.lines().count();
+            diff_output.push_str(&format!("{} @@\n", new_lines_count));
             
             // Add each line prefixed with + and with green background
             for line in self.new_content.lines() {
-                let display_line = if line.trim().is_empty() {
-                    line.to_string()
-                } else {
-                    format!("+{}", line)
-                };
+                let display_line = format!("+{}", line);
                 diff_output.push_str(&display_line.white().on_green().bold().to_string());
                 diff_output.push('\n');
             }
             
             diff_output
         } else {
+            // Use TextDiff to generate accurate line-by-line differences
             let diff = TextDiff::from_lines(&self.old_content, &self.new_content);
-
-            let mut diff_output = format!("File: {}\n", file_name);
-
+            
+            // Start with the standard diff header
+            let mut diff_output = format!("--- {}\n+++ {}\n", file_path_str, file_path_str);
+            
+            // Track the current position in the file
+            let mut old_line_num = 1;
+            let mut new_line_num = 1;
+            
+            // Process the diff operations
             for op in diff.ops() {
-                for change in diff.iter_changes(op) {
+                // Track start position for this hunk
+                let hunk_old_start = old_line_num;
+                let hunk_new_start = new_line_num;
+                
+                // Get the changes for context display
+                let changes: Vec<_> = diff.iter_changes(op).collect();
+                let mut old_count = 0;
+                let mut new_count = 0;
+                
+                // Count the number of lines in this hunk
+                for change in &changes {
                     match change.tag() {
                         ChangeTag::Delete => {
-                            // White text on red background for removed lines
-                            let value = change.value();
-                            // Make sure we prefix with - for clarity in terminals that don't support colors
-                            let display_value = if !value.starts_with('-') && !value.trim().is_empty() {
-                                format!("-{}", value)
-                            } else {
-                                value.to_string()
-                            };
-                            // Apply coloring: white text on dark red background for better readability
-                            let colored_text = display_value.white().on_red().bold().to_string();
-                            diff_output.push_str(&colored_text);
+                            old_count += 1;
                         },
                         ChangeTag::Insert => {
-                            // White text on green background for added lines
-                            let value = change.value();
-                            // Make sure we prefix with + for clarity in terminals that don't support colors
-                            let display_value = if !value.starts_with('+') && !value.trim().is_empty() {
-                                format!("+{}", value)
-                            } else {
-                                value.to_string()
-                            };
-                            // Apply coloring: white text on dark green background for better readability
-                            let colored_text = display_value.white().on_green().bold().to_string();
-                            diff_output.push_str(&colored_text);
+                            new_count += 1;
                         },
-                        ChangeTag::Equal => continue,
-                    };
+                        ChangeTag::Equal => {
+                            old_count += 1;
+                            new_count += 1;
+                        },
+                    }
+                }
+                
+                // Only show output if there are actual changes
+                if old_count > 0 || new_count > 0 {
+                    // Add the hunk header with line numbers
+                    diff_output.push_str(&format!("@@ -{},{} +{},{} @@\n", 
+                        hunk_old_start, old_count, hunk_new_start, new_count));
+                    
+                    // Output the change lines with appropriate prefixes
+                    for change in changes {
+                        match change.tag() {
+                            ChangeTag::Delete => {
+                                // Removed line with - prefix and red background
+                                let value = change.value();
+                                let display_value = format!("-{}", value);
+                                diff_output.push_str(&display_value.white().on_red().bold().to_string());
+                                diff_output.push('\n');
+                                
+                                // Increment the old line counter
+                                old_line_num += 1;
+                            },
+                            ChangeTag::Insert => {
+                                // Added line with + prefix and green background
+                                let value = change.value();
+                                let display_value = format!("+{}", value);
+                                diff_output.push_str(&display_value.white().on_green().bold().to_string());
+                                diff_output.push('\n');
+                                
+                                // Increment the new line counter
+                                new_line_num += 1;
+                            },
+                            ChangeTag::Equal => {
+                                // Context line with space prefix (no background)
+                                let value = change.value();
+                                let display_value = format!(" {}", value);
+                                diff_output.push_str(&display_value);
+                                diff_output.push('\n');
+                                
+                                // Increment both counters for unchanged lines
+                                old_line_num += 1;
+                                new_line_num += 1;
+                            },
+                        };
+                    }
                 }
             }
 
@@ -254,7 +296,17 @@ impl DiffGenerator {
             return true;
         }
         
-        // 3. If the first line is a filename
+        // 3. Look for standard unified diff format markers
+        let has_unified_diff_header = lines.iter().any(|line| line.starts_with("--- "));
+        let has_unified_diff_target = lines.iter().any(|line| line.starts_with("+++ "));
+        let has_hunk_header = lines.iter().any(|line| line.starts_with("@@ -"));
+        
+        // If we have typical unified diff format elements, it's definitely a diff
+        if (has_unified_diff_header && has_unified_diff_target) || has_hunk_header {
+            return true;
+        }
+        
+        // 4. If the first line is a filename
         let first_line = lines[0].trim();
         
         // Common file extensions to recognize
@@ -276,11 +328,17 @@ impl DiffGenerator {
             // Is just a filename without any other text
             (first_line.contains(".") && !first_line.contains(" "));
         
-        // 4. Check for + and - patterns
+        // 5. Check for + and - patterns
         
         // Simple + and - count
         let plus_count = lines.iter().filter(|line| line.trim_start().starts_with('+')).count();
         let minus_count = lines.iter().filter(|line| line.trim_start().starts_with('-')).count();
+        let context_count = lines.iter().filter(|line| line.trim_start().starts_with(' ')).count();
+        
+        // If we have all three types of lines (context, plus, minus), it's very likely a diff
+        if plus_count > 0 && minus_count > 0 && context_count > 0 {
+            return true;
+        }
         
         // If the first line looks like a path and we have diff markers, it's likely a diff
         if looks_like_file_path && (plus_count > 0 || minus_count > 0) {
@@ -292,7 +350,7 @@ impl DiffGenerator {
             return true;
         }
         
-        // 5. Special format detection: Look for diff formatting patterns
+        // 6. Special format detection: Look for diff formatting patterns
         
         // Pattern matching for specific diff formatting
         let has_diff_pattern = lines.windows(3).any(|window| {
@@ -313,13 +371,22 @@ impl DiffGenerator {
             return true;
         }
         
-        // 6. Last resort: If there's exactly one + and one - line, and the block is short 
+        // 7. Look for line number references in @@ format
+        let line_number_pattern = lines.iter().any(|line| {
+            line.contains("@@ -") && line.contains(" @@") && line.contains(",")
+        });
+        
+        if line_number_pattern {
+            return true;
+        }
+        
+        // 8. Last resort: If there's exactly one + and one - line, and the block is short 
         // (like the example given), it's probably a diff
         if plus_count == 1 && minus_count == 1 && lines.len() < 15 {
             return true;
         }
         
-        // 7. Check for partial code blocks that might be additions
+        // 9. Check for partial code blocks that might be additions
         let looks_like_pasted_code = 
             // Contains indentation patterns typical of code
             lines.iter().filter(|line| line.starts_with("  ") || line.starts_with("\t")).count() > 2 ||
@@ -511,7 +578,7 @@ impl DiffGenerator {
     }
 
     fn parse_diff(&self, diff_text: &str) -> Result<FileDiff> {
-        // Extract file path from the first line
+        // Extract file path from the unified diff format headers
         let lines: Vec<&str> = diff_text.lines().collect();
 
         if lines.is_empty() {
@@ -523,24 +590,46 @@ impl DiffGenerator {
         // Special handling for "[Entire file content is new/modified]" marker
         let has_entire_file_marker = diff_text.contains("[Entire file content is new/modified]");
         
-        // Extract a clean filename from the first line, ignoring diff markers
-        let first_line = lines[0].trim();
-        let file_path_str = first_line
-            .trim_start_matches('+')
-            .trim_start_matches('-')
-            .trim_start_matches("// ")
-            .trim_start_matches("/* ")
-            .trim_start_matches("* ")
-            .trim_start_matches("/*")
-            .trim_start_matches('/')
-            .trim_start_matches('\\')
-            .trim();
-            
-        // Build a simple path, we'll sanitize it when applying
-        let file_path = PathBuf::from(file_path_str);
+        // Look for standard unified diff format headers (--- and +++)
+        let mut file_path = PathBuf::new();
+        let mut is_new_file = false;
         
-        // Check if the file exists in the current directory
-        let mut is_new_file = !std::path::Path::new(file_path.file_name().unwrap_or_default()).exists();
+        // First try to find the file path in the unified diff format headers
+        for line in &lines {
+            if line.starts_with("--- ") {
+                if line.contains("/dev/null") || line.contains("/dev/null") {
+                    is_new_file = true;
+                }
+            } else if line.starts_with("+++ ") {
+                let path_part = line.trim_start_matches("+++ ");
+                file_path = PathBuf::from(path_part);
+                break;
+            }
+        }
+        
+        // If we couldn't find proper headers, fall back to the old method
+        if file_path.as_os_str().is_empty() {
+            // Extract a clean filename from the first line, ignoring diff markers
+            let first_line = lines[0].trim();
+            let file_path_str = first_line
+                .trim_start_matches('+')
+                .trim_start_matches('-')
+                .trim_start_matches("// ")
+                .trim_start_matches("/* ")
+                .trim_start_matches("* ")
+                .trim_start_matches("/*")
+                .trim_start_matches('/')
+                .trim_start_matches('\\')
+                .trim();
+                
+            // Build a simple path, we'll sanitize it when applying
+            file_path = PathBuf::from(file_path_str);
+        }
+        
+        // Check if the file exists in the current directory if we're still not sure it's a new file
+        if !is_new_file {
+            is_new_file = !std::path::Path::new(file_path.file_name().unwrap_or_default()).exists();
+        }
         
         // If we have the entire file marker, this might be a complete replacement
         // even if the file exists, we'll treat it as a new file
@@ -562,14 +651,37 @@ impl DiffGenerator {
                     new_content = "// This file was marked as new or completely replaced,\n// but the specific content couldn't be extracted.\n".to_string();
                 }
             } else {
-                // For regular new files, we'll just collect all the added lines
-                for line in lines.iter().skip(1) {
-                    if line.starts_with('+') {
+                // For regular new files in standard unified diff format
+                // Look for hunk headers and collect all added lines
+                let mut in_hunk = false;
+                
+                for line in lines.iter() {
+                    if line.starts_with("@@ ") {
+                        // We found a hunk header
+                        in_hunk = true;
+                        continue;
+                    }
+                    
+                    if in_hunk && line.starts_with('+') {
                         // Trim leading space after the '+' to handle "+ code" formatting
                         let content = &line[1..];
-                        let trimmed = if content.starts_with(' ') { &content[1..] } else { content };
-                        new_content.push_str(trimmed);
+                        new_content.push_str(content);
                         new_content.push('\n');
+                    } else if in_hunk && !line.starts_with('-') && !line.starts_with(' ') && !line.is_empty() {
+                        // End of hunk
+                        in_hunk = false;
+                    }
+                }
+                
+                // If we didn't find any hunks, fall back to the old method
+                if new_content.is_empty() {
+                    for line in lines.iter() {
+                        if line.starts_with('+') && !line.starts_with("+++ ") {
+                            // Add the content, removing the + marker
+                            let content = &line[1..];
+                            new_content.push_str(content);
+                            new_content.push('\n');
+                        }
                     }
                 }
             }
@@ -580,51 +692,145 @@ impl DiffGenerator {
             // For existing files, read the current content
             old_content = fs::read_to_string(actual_path)
                 .map_err(|_| anyhow!(DiffError::FileNotFound(actual_path.to_string_lossy().to_string())))?;
-
-            // Track our position in the document as we process diff lines
-            let mut removed_lines = Vec::new();
-            let mut added_lines = Vec::new();
-
-            // First, collect all removed and added lines
-            for line in lines.iter().skip(1) {
-                if line.starts_with('-') {
-                    // For removed lines, we need to keep the exact formatting
-                    removed_lines.push(&line[1..]);
-                } else if line.starts_with('+') {
-                    // For added lines, handle the "+ code" formatting by removing extra leading space
-                    let content = &line[1..];
-                    let trimmed = if content.starts_with(' ') { &content[1..] } else { content };
-                    added_lines.push(trimmed);
-                }
-            }
-
-            // Simple approach: replace the old content with the new content
-            // by finding the removed lines and replacing them with added lines
-            let old_lines: Vec<&str> = old_content.lines().collect();
-            let mut new_lines = Vec::new();
             
+            // For standard unified diff format, we need to parse the hunks with line numbers
+            let old_lines: Vec<&str> = old_content.lines().collect();
+            let mut new_lines = old_lines.iter().map(|&s| s.to_string()).collect::<Vec<String>>();
+            
+            // Loop through the diff to find hunks
             let mut i = 0;
-            while i < old_lines.len() {
-                // Try to find a sequence of removed lines starting at this position
-                let mut match_length = 0;
-                for (j, &removed) in removed_lines.iter().enumerate() {
-                    if i + j < old_lines.len() && old_lines[i + j] == removed {
-                        match_length += 1;
-                    } else {
-                        break;
+            while i < lines.len() {
+                let line = lines[i];
+                
+                // Look for hunk headers
+                if line.starts_with("@@ -") && line.contains(" @@") {
+                    // Parse the hunk header to get line numbers and counts
+                    let header_parts: Vec<&str> = line.trim_matches(|c| c == '@' || c == ' ').split(' ').collect();
+                    
+                    if header_parts.len() >= 2 {
+                        let old_info = header_parts[0].trim_start_matches('-');
+                        let new_info = header_parts[1].trim_start_matches('+');
+                        
+                        // Parse old line numbers: -X,Y where X = start line (1-based), Y = line count
+                        let old_parts: Vec<&str> = old_info.split(',').collect();
+                        if old_parts.len() >= 1 {
+                            let old_start = old_parts[0].parse::<usize>().unwrap_or(1);
+                            let old_count = if old_parts.len() >= 2 {
+                                old_parts[1].parse::<usize>().unwrap_or(0)
+                            } else {
+                                0
+                            };
+                            
+                            // Parse new line numbers: +X,Y where X = start line (1-based), Y = line count
+                            // Note: We're parsing these values for completeness and potential future use,
+                            // but we only need the old line info to locate the changes in the file
+                            let _new_parts: Vec<&str> = new_info.split(',').collect();
+                            
+                            // Collect the content from the hunk
+                            let mut old_hunk_content = Vec::new();
+                            let mut new_hunk_content = Vec::new();
+                            
+                            // Move to the content lines
+                            i += 1;
+                            while i < lines.len() {
+                                let hunk_line = lines[i];
+                                
+                                // Process content lines
+                                if hunk_line.starts_with('-') {
+                                    old_hunk_content.push(&hunk_line[1..]);
+                                } else if hunk_line.starts_with('+') {
+                                    new_hunk_content.push(&hunk_line[1..]);
+                                } else if hunk_line.starts_with(' ') {
+                                    // Context lines are the same in both old and new content
+                                    old_hunk_content.push(&hunk_line[1..]);
+                                    new_hunk_content.push(&hunk_line[1..]);
+                                } else if hunk_line.starts_with("@@ ") {
+                                    // Found next hunk header
+                                    i -= 1; // Reprocess this line as a new hunk
+                                    break;
+                                } else if hunk_line.is_empty() {
+                                    // Skip empty lines but continue processing this hunk
+                                } else {
+                                    // End of hunk
+                                    break;
+                                }
+                                
+                                i += 1;
+                            }
+                            
+                            // Apply the changes to the new_lines
+                            // Convert from 1-based indexing to 0-based
+                            let old_start_idx = old_start.saturating_sub(1);
+                            
+                            // Replace the lines in the new content
+                            // The number of lines to replace in the old content
+                            let old_range_end = old_start_idx + old_count;
+                            
+                            // If the ranges are valid
+                            if old_start_idx < new_lines.len() {
+                                // Adjust the new_lines to splice in our changes
+                                let capped_old_range_end = std::cmp::min(old_range_end, new_lines.len());
+                                
+                                // Remove the old lines
+                                new_lines.splice(
+                                    old_start_idx..capped_old_range_end,
+                                    new_hunk_content.iter().map(|&s| s.to_string())
+                                );
+                            }
+                        }
+                    }
+                }
+                
+                i += 1;
+            }
+            
+            // If we couldn't parse any hunks (maybe not standard format), fall back to the old method
+            if new_lines.len() == old_lines.len() && new_lines.iter().enumerate().all(|(i, line)| line == &old_lines[i].to_string()) {
+                // Track our position in the document as we process diff lines
+                let mut removed_lines = Vec::new();
+                let mut added_lines = Vec::new();
+
+                // First, collect all removed and added lines
+                for line in lines.iter() {
+                    if line.starts_with('-') && !line.starts_with("--- ") {
+                        // For removed lines, we need to keep the exact formatting
+                        removed_lines.push(&line[1..]);
+                    } else if line.starts_with('+') && !line.starts_with("+++ ") {
+                        // For added lines, handle the "+ code" formatting by removing extra leading space
+                        let content = &line[1..];
+                        let trimmed = if content.starts_with(' ') { &content[1..] } else { content };
+                        added_lines.push(trimmed);
                     }
                 }
 
-                if match_length > 0 && match_length == removed_lines.len() {
-                    // Found all removed lines in sequence, replace with added lines
-                    for &added in &added_lines {
-                        new_lines.push(added.to_string());
+                // Only apply changes if we found diff content
+                if !removed_lines.is_empty() || !added_lines.is_empty() {
+                    new_lines = Vec::new();
+                    
+                    let mut i = 0;
+                    while i < old_lines.len() {
+                        // Try to find a sequence of removed lines starting at this position
+                        let mut match_length = 0;
+                        for (j, &removed) in removed_lines.iter().enumerate() {
+                            if i + j < old_lines.len() && old_lines[i + j] == removed {
+                                match_length += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if match_length > 0 && match_length == removed_lines.len() {
+                            // Found all removed lines in sequence, replace with added lines
+                            for &added in &added_lines {
+                                new_lines.push(added.to_string());
+                            }
+                            i += match_length;
+                        } else {
+                            // No match, keep the original line
+                            new_lines.push(old_lines[i].to_string());
+                            i += 1;
+                        }
                     }
-                    i += match_length;
-                } else {
-                    // No match, keep the original line
-                    new_lines.push(old_lines[i].to_string());
-                    i += 1;
                 }
             }
 
