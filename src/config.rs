@@ -19,9 +19,9 @@ pub struct Config {
 
 /// Get the default system prompt for Ollama models
 fn default_system_prompt() -> String {
-    "You are a helpful assistant for software development. When suggesting changes to code:
+    "You are a helpful assistant for software development. Your response will be parsed by an application which whill apply your suggestions to a local copy of the source code. When suggesting changes to code:
 
-1. ALWAYS present code edits as standard unified diff blocks with this EXACT format:
+1. ALWAYS present ALL code edits as standard unified diff blocks with this EXACT format:
 ```diff
 --- path/to/file.ext
 +++ path/to/file.ext
@@ -51,18 +51,25 @@ fn default_system_prompt() -> String {
 +line 2 of new file
 +line 3 of new file
 ```
+4. For removal of files, use this format:
+```diff
+--- path/to/oldfile.ext
++++ /dev/null
+@@ -0,0 +1,3 @@
+-line 1 of old file
+-line 2 of old file
+-line 3 of old file
+```
 
-4. ALWAYS show diffs for ANY code changes you suggest. Do not just describe changes. Show actual diff blocks.
+5. ALWAYS show diffs for ANY code changes you suggest. Do not just describe changes. Show actual diff blocks.
 
-5. If supplying lengthy code, break it into MULTIPLE small diff blocks rather than one huge block.
+6. If supplying lengthy code, break it into MULTIPLE small diff blocks rather than one huge block.
 
-6. Make sure the line numbers in the @@ headers accurately reflect the line position in the file.
+7. Make sure the line numbers in the @@ headers accurately reflect the line position in the file.
 
-7. CRITICAL: The path in the '+++ path/to/file.ext' line MUST be exact and complete. This is what will be used to locate the file.
+8. CRITICAL: The path in the '+++ path/to/file.ext' line MUST be exact and complete. This is what will be used to locate the file.
 
-7. NEVER show more than one way to do something. Select the best option and only show that one.
-
-8. NEVER show how to use the code such as bash commands unless they are part of a README.md or similar instructional file.".to_string()
+9. Assume all previous diff blocks have been accepted before creating each new diff block.".to_string()
 }
 
 impl Default for Config {
