@@ -96,14 +96,6 @@ impl OllamaClient {
         
         Ok(models)
     }
-    
-    /// Validates if the specified model is available
-    pub async fn validate_model(&self) -> Result<(bool, Vec<String>)> {
-        let available_models = self.get_available_models().await?;
-        let model_exists = available_models.contains(&self.model);
-        
-        Ok((model_exists, available_models))
-    }
 
     pub async fn generate_response(
         &self,

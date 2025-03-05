@@ -24,8 +24,8 @@ pub struct Cli {
     command: Option<Commands>,
 
     /// The model to use for code suggestions
-    #[clap(short, long, default_value = "llama3")]
-    model: String,
+    #[clap(short, long)]
+    model: Option<String>,
 
     /// Ollama API endpoint URL
     #[clap(long, default_value = "http://localhost:11434")]
@@ -51,7 +51,7 @@ enum Commands {
 
 pub async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
-    let model = cli.model;
+    let model_opt = cli.model;
     let api_url = cli.api_url;
     
     // Load configuration
@@ -106,7 +106,7 @@ pub async fn run_cli() -> Result<()> {
         }
         None => {
             // Interactive mode
-            run_interactive_mode(&model, &api_url, config).await?;
+            run_interactive_mode(model_opt, &api_url, config).await?;
         }
     }
 
@@ -150,12 +150,13 @@ fn stop_thinking_animation(handle: Arc<AtomicBool>) {
     thread::sleep(Duration::from_millis(50));
 }
 
-async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config::Config) -> Result<()> {
-    let mut client = OllamaClient::new(api_url, model, config.clone());
+async fn run_interactive_mode(model_opt: Option<String>, api_url: &str, config: crate::config::Config) -> Result<()> {
+    // Create a temporary client for testing connection and getting models
+    let temp_client = OllamaClient::new(api_url, "", config.clone());
     
     // Test connection to Ollama on startup
     println!("{}", "Testing connection to Ollama...".yellow());
-    match client.test_connection().await {
+    match temp_client.test_connection().await {
         Ok(true) => println!("{}", "✅ Connected to Ollama successfully!".green()),
         Ok(false) => {
             println!("{}", format!("❌ Failed to connect to Ollama at {}. Is Ollama running?", api_url).red());
@@ -169,46 +170,44 @@ async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config:
         }
     }
     
-    // Validate that the specified model exists
-    println!("{}", format!("Checking if model '{}' is available...", model).yellow());
-    let (model_exists, available_models) = match client.validate_model().await {
-        Ok(result) => result,
+    // Get available models
+    let available_models = match temp_client.get_available_models().await {
+        Ok(models) => models,
         Err(e) => {
-            println!("{}", format!("❌ Error validating model: {}", e).red());
-            return Err(anyhow!("Error validating model"));
+            println!("{}", format!("❌ Error getting available models: {}", e).red());
+            return Err(anyhow!("Error getting available models"));
         }
     };
     
-    let selected_model = if !model_exists {
-        if available_models.is_empty() {
-            println!("{}", "❌ No models found in Ollama. Please pull a model first.".red());
-            println!("{}", "Example: ollama pull llama3".yellow());
-            return Err(anyhow!("No models available"));
+    if available_models.is_empty() {
+        println!("{}", "❌ No models found in Ollama. Please pull a model first.".red());
+        println!("{}", "Example: ollama pull llama3".yellow());
+        return Err(anyhow!("No models available"));
+    }
+    
+    // Determine which model to use
+    let selected_model = match model_opt {
+        Some(model) => {
+            // Check if the specified model exists
+            println!("{}", format!("Checking if model '{}' is available...", model).yellow());
+            
+            if available_models.contains(&model) {
+                println!("{}", "✅ Model found!".green());
+                model
+            } else {
+                println!("{}", format!("⚠️ Model '{}' not found!", model).yellow());
+                select_model_from_list(&available_models)?
+            }
+        },
+        None => {
+            // No model specified, ask user to select one
+            println!("{}", "No model specified. Please select from available models:".blue());
+            select_model_from_list(&available_models)?
         }
-        
-        println!("{}", format!("⚠️ Model '{}' not found!", model).yellow());
-        println!("{}", "Available models:".blue());
-        
-        // Create a list of available models for selection
-        let model_choices: Vec<&str> = available_models.iter().map(AsRef::as_ref).collect();
-        
-        let selection = Select::with_theme(&ColorfulTheme::default())
-            .with_prompt("Select a model to use")
-            .default(0)
-            .items(&model_choices)
-            .interact()?;
-        
-        // Get the selected model name
-        let selected = available_models[selection].clone();
-        println!("{}", format!("Selected model: {}", selected).green());
-        
-        // Create a new client with the selected model
-        client = OllamaClient::new(api_url, &selected, config.clone());
-        selected
-    } else {
-        println!("{}", "✅ Model found!".green());
-        model.to_string()
     };
+    
+    // Create the real client with the selected model
+    let client = OllamaClient::new(api_url, &selected_model, config.clone());
     
     let context_manager = ContextManager::new(".")?;
     let diff_generator = DiffGenerator::new();
@@ -365,6 +364,23 @@ async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config:
 }
 
 /// Get the path to the history file in the config directory
+fn select_model_from_list(available_models: &[String]) -> Result<String> {
+    // Create a list of available models for selection
+    let model_choices: Vec<&str> = available_models.iter().map(AsRef::as_ref).collect();
+    
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select a model to use")
+        .default(0)
+        .items(&model_choices)
+        .interact()?;
+    
+    // Get the selected model name
+    let selected = available_models[selection].clone();
+    println!("{}", format!("Selected model: {}", selected).green());
+    
+    Ok(selected)
+}
+
 fn get_history_file_path() -> Result<PathBuf> {
     let mut path = get_config_dir()?;
     
