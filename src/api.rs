@@ -1,7 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
+use std::collections::HashSet;
 
 use crate::config::Config;
 
@@ -39,6 +40,69 @@ impl OllamaClient {
     
     pub fn get_api_url(&self) -> &str {
         &self.api_url
+    }
+    
+    /// Tests if the connection to Ollama is working
+    pub async fn test_connection(&self) -> Result<bool> {
+        let request_url = format!("{}/api/tags", self.api_url);
+        
+        let response = self.client
+            .get(&request_url)
+            .send()
+            .await;
+            
+        match response {
+            Ok(res) => Ok(res.status().is_success()),
+            Err(_) => Ok(false)
+        }
+    }
+    
+    /// Gets a list of available models from Ollama
+    pub async fn get_available_models(&self) -> Result<Vec<String>> {
+        let request_url = format!("{}/api/tags", self.api_url);
+        
+        let response = self.client
+            .get(&request_url)
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            return Err(anyhow!("Failed to get available models, status: {}", response.status()));
+        }
+        
+        let body = response.text().await?;
+        let json: Value = serde_json::from_str(&body)?;
+        
+        // Parse the JSON response to extract model names
+        let models = match json.get("models") {
+            Some(models_array) => {
+                let mut model_names = HashSet::new();
+                
+                if let Some(array) = models_array.as_array() {
+                    for model_obj in array {
+                        if let Some(name) = model_obj.get("name").and_then(|n| n.as_str()) {
+                            model_names.insert(name.to_string());
+                        }
+                    }
+                }
+                
+                // Convert to sorted Vec
+                let mut model_names_vec: Vec<String> = model_names.into_iter().collect();
+                model_names_vec.sort();
+                model_names_vec
+            },
+            None => Vec::new(),
+        };
+        
+        Ok(models)
+    }
+    
+    /// Validates if the specified model is available
+    pub async fn validate_model(&self) -> Result<(bool, Vec<String>)> {
+        let available_models = self.get_available_models().await?;
+        let model_exists = available_models.contains(&self.model);
+        
+        Ok((model_exists, available_models))
     }
 
     pub async fn generate_response(

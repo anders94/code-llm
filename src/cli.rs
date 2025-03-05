@@ -151,11 +151,69 @@ fn stop_thinking_animation(handle: Arc<AtomicBool>) {
 }
 
 async fn run_interactive_mode(model: &str, api_url: &str, config: crate::config::Config) -> Result<()> {
-    let client = OllamaClient::new(api_url, model, config);
+    let mut client = OllamaClient::new(api_url, model, config.clone());
+    
+    // Test connection to Ollama on startup
+    println!("{}", "Testing connection to Ollama...".yellow());
+    match client.test_connection().await {
+        Ok(true) => println!("{}", "✅ Connected to Ollama successfully!".green()),
+        Ok(false) => {
+            println!("{}", format!("❌ Failed to connect to Ollama at {}. Is Ollama running?", api_url).red());
+            println!("{}", "Please start Ollama and try again.".yellow());
+            return Err(anyhow!("Could not connect to Ollama"));
+        },
+        Err(e) => {
+            println!("{}", format!("❌ Error testing connection to Ollama: {}", e).red());
+            println!("{}", "Please check that Ollama is running and try again.".yellow());
+            return Err(anyhow!("Error testing connection to Ollama"));
+        }
+    }
+    
+    // Validate that the specified model exists
+    println!("{}", format!("Checking if model '{}' is available...", model).yellow());
+    let (model_exists, available_models) = match client.validate_model().await {
+        Ok(result) => result,
+        Err(e) => {
+            println!("{}", format!("❌ Error validating model: {}", e).red());
+            return Err(anyhow!("Error validating model"));
+        }
+    };
+    
+    let selected_model = if !model_exists {
+        if available_models.is_empty() {
+            println!("{}", "❌ No models found in Ollama. Please pull a model first.".red());
+            println!("{}", "Example: ollama pull llama3".yellow());
+            return Err(anyhow!("No models available"));
+        }
+        
+        println!("{}", format!("⚠️ Model '{}' not found!", model).yellow());
+        println!("{}", "Available models:".blue());
+        
+        // Create a list of available models for selection
+        let model_choices: Vec<&str> = available_models.iter().map(AsRef::as_ref).collect();
+        
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select a model to use")
+            .default(0)
+            .items(&model_choices)
+            .interact()?;
+        
+        // Get the selected model name
+        let selected = available_models[selection].clone();
+        println!("{}", format!("Selected model: {}", selected).green());
+        
+        // Create a new client with the selected model
+        client = OllamaClient::new(api_url, &selected, config.clone());
+        selected
+    } else {
+        println!("{}", "✅ Model found!".green());
+        model.to_string()
+    };
+    
     let context_manager = ContextManager::new(".")?;
     let diff_generator = DiffGenerator::new();
     
-    println!("{}", format!("Welcome to code-llm! Using model: {}", model).green());
+    println!("{}", format!("Welcome to code-llm! Using model: {}", selected_model).green());
     println!("{}", "Type your questions/requests or 'exit' to quit.".blue());
     
     let mut conversation_history = Vec::new();
