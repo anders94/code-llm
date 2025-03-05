@@ -60,7 +60,59 @@ pub async fn run_cli() -> Result<()> {
     match &cli.command {
         Some(Commands::Init) => {
             println!("{}", "Initializing new context...".green());
-            // Initialize code context logic would go here
+            
+            // Create local .code-llm directory path
+            let local_config_dir = PathBuf::from(".code-llm");
+            let local_config_path = local_config_dir.join("config.toml");
+            
+            // Check if local config already exists
+            let should_proceed = if local_config_path.exists() {
+                println!("{}", format!("⚠️  Warning: Local config file already exists at {}", local_config_path.display()).yellow());
+                println!("{}", "Initializing will overwrite the existing configuration.".yellow());
+                
+                // Ask user if they want to proceed
+                let options = vec!["Yes, overwrite it", "No, cancel initialization"];
+                let selection = Select::with_theme(&ColorfulTheme::default())
+                    .with_prompt("Do you want to proceed?")
+                    .default(1) // Default to safer option (cancel)
+                    .items(&options)
+                    .interact()?;
+                
+                selection == 0 // True if they selected "Yes"
+            } else {
+                true // No existing config, proceed
+            };
+            
+            if !should_proceed {
+                println!("{}", "Initialization cancelled.".blue());
+                return Ok(());
+            }
+            
+            // Check if Ollama is running and select a model
+            let selected_model = initialize_with_model_selection(model_opt, &api_url, &config).await?;
+            
+            // Create directory if needed
+            if !local_config_dir.exists() {
+                println!("{}", "Creating local .code-llm directory...".blue());
+                fs::create_dir_all(&local_config_dir)?;
+            }
+            
+            // Create local config.toml file
+            println!("{}", format!("Creating local config file at {}...", local_config_path.display()).blue());
+            
+            // Create minimal config with selected model
+            let config_content = format!(r#"# code-llm local configuration
+# Created by code-llm init
+
+# Default model to use
+model = "{}"
+"#, selected_model);
+            
+            fs::write(&local_config_path, config_content)?;
+            
+            println!("{}", format!("✅ Project initialized successfully with model '{}'", selected_model).green());
+            println!("{}", "You can now run 'code-llm' in this directory to start the interactive mode.".blue());
+            
             return Ok(());
         }
         Some(Commands::Config { path, edit }) => {
@@ -150,7 +202,9 @@ fn stop_thinking_animation(handle: Arc<AtomicBool>) {
     thread::sleep(Duration::from_millis(50));
 }
 
-async fn run_interactive_mode(model_opt: Option<String>, api_url: &str, config: crate::config::Config) -> Result<()> {
+/// Handles Ollama connectivity check and model selection
+/// Returns the selected model name
+async fn initialize_with_model_selection(model_opt: Option<String>, api_url: &str, config: &crate::config::Config) -> Result<String> {
     // Create a temporary client for testing connection and getting models
     let temp_client = OllamaClient::new(api_url, "", config.clone());
     
@@ -206,7 +260,14 @@ async fn run_interactive_mode(model_opt: Option<String>, api_url: &str, config: 
         }
     };
     
-    // Create the real client with the selected model
+    Ok(selected_model)
+}
+
+async fn run_interactive_mode(model_opt: Option<String>, api_url: &str, config: crate::config::Config) -> Result<()> {
+    // Check connectivity and select model
+    let selected_model = initialize_with_model_selection(model_opt, api_url, &config).await?;
+    
+    // Create the client with the selected model
     let client = OllamaClient::new(api_url, &selected_model, config.clone());
     
     let context_manager = ContextManager::new(".")?;
