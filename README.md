@@ -2,6 +2,10 @@
 
 A CLI tool that works in an iterative chat-like style, providing code suggestions based on your local directory context using Ollama models.
 
+## Demo
+[![Code-LLM Demo](https://img.youtube.com/vi/JFCjAUYhlqU/0.jpg)](https://youtu.be/JFCjAUYhlqU)
+
+
 ## Features
 
 - Interactive chat interface for code assistance
